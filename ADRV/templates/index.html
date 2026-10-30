@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ADRV Dashboard</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<style>
+  body { background:#111; color:#eee; font-family:system-ui, sans-serif; margin:0; padding:16px; }
+  h1 { font-size:20px; margin:0 0 12px 0; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  .card { background:#1c1c1c; border:1px solid #2a2a2a; border-radius:8px; padding:12px; }
+  .card img { width:100%; border-radius:6px; background:#000; }
+  .stat { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dashed #2a2a2a; }
+  .stat:last-child { border-bottom:none; }
+  .stat .k { color:#9aa; }
+  .stat .v { font-weight:600; }
+  .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  button { background:#2a2a2a; color:#eee; border:1px solid #3a3a3a; padding:10px 14px;
+           border-radius:6px; cursor:pointer; font-size:16px; }
+  button:hover { background:#3a3a3a; }
+  button.stop { background:#7a1a1a; border-color:#a02020; }
+  .hold { user-select:none; }
+  input[type=range] { width:100%; }
+</style>
+</head>
+<body>
+<h1>ADRV Mission Control</h1>
+<div class="grid">
+  <div class="card">
+    <h3>Thermal</h3>
+    <img src="{{ url_for('video_thermal') }}" alt="thermal">
+  </div>
+  <div class="card">
+    <h3>Camera (YOLO)</h3>
+    <img src="{{ url_for('video_camera') }}" alt="camera">
+  </div>
+</div>
+
+<div class="card" style="margin-top:12px;">
+  <h3>Status</h3>
+  <div class="stat"><span class="k">Mission</span><span class="v" id="s_mission">—</span></div>
+  <div class="stat"><span class="k">Motor</span><span class="v" id="s_motor">—</span></div>
+  <div class="stat"><span class="k">Shaft State</span><span class="v" id="s_shaft">—</span></div>
+  <div class="stat"><span class="k">Human Near (camera)</span><span class="v" id="s_hnear">—</span></div>
+  <div class="stat"><span class="k">Human Detected</span><span class="v" id="s_hseen">—</span></div>
+  <div class="stat"><span class="k">Human Distance</span><span class="v" id="s_hcm">—</span></div>
+  <div class="stat"><span class="k">Human box height (px)</span><span class="v" id="s_hpx">—</span></div>
+  <div class="stat"><span class="k">ESP32 link</span><span class="v" id="s_esp">—</span></div>
+  <div class="stat"><span class="k">Front / Left / Right (cm)</span><span class="v" id="s_sonar">—</span></div>
+  <div class="stat"><span class="k">Thermal max (°C)</span><span class="v" id="s_tmax">—</span></div>
+  <div class="stat"><span class="k">Pan (°)</span><span class="v" id="s_pan">—</span></div>
+  <div class="stat"><span class="k">Flame 1 / 2</span><span class="v" id="s_flame">—</span></div>
+  <div class="stat"><span class="k">Pump</span><span class="v" id="s_pump">—</span></div>
+</div>
+
+<div class="card" style="margin-top:12px;">
+  <h3>Mission</h3>
+  <div class="row">
+    <button onclick="hit('/mission/start')">Start Mission</button>
+    <button class="stop" onclick="hit('/mission/stop')">Stop Mission</button>
+  </div>
+</div>
+
+<div class="card" style="margin-top:12px;">
+  <h3>Manual (hold)</h3>
+  <div class="row">
+    <button class="hold" data-cmd="left">◀</button>
+    <button class="hold" data-cmd="forward">▲</button>
+    <button class="hold" data-cmd="backward">▼</button>
+    <button class="hold" data-cmd="right">▶</button>
+    <button class="stop" onclick="hit('/mission/stop')">STOP ALL</button>
+  </div>
+  <h3 style="margin-top:14px;">Pan</h3>
+  <input type="range" min="15" max="165" value="90" id="pan"
+         oninput="panSet(this.value)">
+</div>
+
+<script>
+function hit(url) { fetch(url).catch(()=>{}); }
+
+let holdTimer = null, holdCmd = null;
+document.querySelectorAll('.hold').forEach(btn => {
+  const cmd = btn.dataset.cmd;
+  const start = () => {
+    holdCmd = cmd;
+    const tick = () => { if (holdCmd === cmd) { hit('/cmd/' + cmd); holdTimer = setTimeout(tick, 200); } };
+    tick();
+  };
+  const end = () => {
+    if (holdCmd === null) return;          // not actually held: do nothing
+    holdCmd = null;
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    hit('/cmd/stop');
+  };
+  btn.addEventListener('mousedown', start);
+  btn.addEventListener('touchstart', e => { e.preventDefault(); start(); });
+  ['mouseup','mouseleave','touchend','touchcancel'].forEach(ev =>
+    btn.addEventListener(ev, end));
+});
+
+let panLast = 0, panTimer = null;
+function panSet(v) {
+  const send = () => { panLast = Date.now(); fetch('/cmd/pan?angle=' + v).catch(()=>{}); };
+  clearTimeout(panTimer);
+  if (Date.now() - panLast > 120) send(); else panTimer = setTimeout(send, 120);
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/status'); const j = await r.json();
+    document.getElementById('s_mission').textContent = j.mission;
+    document.getElementById('s_motor').textContent   = j.motor;
+    document.getElementById('s_shaft').textContent   = j.shaft_state;
+    document.getElementById('s_hnear').textContent   = j.human_near ? 'YES' : 'no';
+    document.getElementById('s_hseen').textContent   = j.human_seen ? 'YES' : 'no';
+    document.getElementById('s_hcm').textContent     =
+        (j.human_cm === null || j.human_cm === undefined) ? '—'
+        : j.human_cm.toFixed(0) + ' cm';
+    document.getElementById('s_hpx').textContent =
+        (j.human_h_px === null || j.human_h_px === undefined) ? '—' : j.human_h_px;
+    document.getElementById('s_esp').textContent = j.esp_ok ? 'OK' : 'NO DATA';
+    const e = j.esp || {};
+    document.getElementById('s_sonar').textContent =
+      `${e.front_cm ?? '—'} / ${e.left_cm ?? '—'} / ${e.right_cm ?? '—'}`;
+    document.getElementById('s_tmax').textContent =
+      (j.thermal && j.thermal.max !== undefined) ? j.thermal.max.toFixed(1) : '—';
+    document.getElementById('s_pan').textContent  = j.pan ?? '—';
+    document.getElementById('s_flame').textContent =
+      `${j.flame.flame1 ? 'FIRE' : 'ok'} / ${j.flame.flame2 ? 'FIRE' : 'ok'}`;
+    document.getElementById('s_pump').textContent = j.flame.pump ? 'ON' : 'off';
+  } catch (err) {}
+  setTimeout(poll, 500);
+}
+poll();
+</script>
+</body>
+</html>

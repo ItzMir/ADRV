@@ -1,0 +1,8 @@
+flask
+pyserial
+numpy
+opencv-python
+ultralytics
+picamera2
+gpiozero
+lgpio
